@@ -1,0 +1,13 @@
+Hardware Components:
+Display: Displaytech INT035TFT-TS}
+3.5" TFT LCD, 320×240 QVGA resolution.
+8080-style parallel interface via SSD1963 controller.
+4-wire resistive touchscreen via MAX11802 (SPI).
+
+Microcontroller: Arduino Mega 2560
+16-bit data bus support.
+Flash and SRAM for graphics and game logic.
+
+Wiring Summary:
+16 data pins + 5 control lines for TFT.
+SPI lines for touch: MOSI, MISO, SCK, CS.
