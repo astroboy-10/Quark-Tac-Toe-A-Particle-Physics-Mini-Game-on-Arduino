@@ -1,0 +1,141 @@
+#include <MCUFRIEND_kbv.h>
+#include <TouchScreen.h>
+
+MCUFRIEND_kbv tft;
+#define LCD_WIDTH  320
+#define LCD_HEIGHT 240
+
+#define YP A3
+#define XM A2
+#define YM 9
+#define XP 8
+#define TS_MINX 120
+#define TS_MAXX 900
+#define TS_MINY 70
+#define TS_MAXY 920
+
+TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
+#define MINPRESSURE 10
+#define MAXPRESSURE 1000
+
+const int gridSize = 3;
+const int cellWidth = LCD_WIDTH / gridSize;
+const int cellHeight = LCD_HEIGHT / gridSize;
+
+enum ParticleType { QUARK, LEPTON };
+struct Particle {
+  String symbol;
+  ParticleType type;
+};
+
+struct Cell {
+  bool occupied = false;
+  Particle particle;
+};
+
+Cell board[3][3];
+
+Particle quarks[] = { {"u", QUARK}, {"d", QUARK}, {"s", QUARK} };
+Particle leptons[] = { {"e⁻", LEPTON}, {"μ⁻", LEPTON}, {"νₑ", LEPTON} };
+
+bool turnQuark = true;
+
+void setup() {
+  Serial.begin(9600);
+  uint16_t ID = tft.readID();
+  tft.begin(ID);
+  tft.setRotation(1);
+  tft.fillScreen(BLACK);
+  drawGrid();
+}
+
+void loop() {
+  TSPoint p = ts.getPoint();
+  pinMode(XM, OUTPUT);
+  pinMode(YP, OUTPUT);
+
+  if (p.z > MINPRESSURE && p.z < MAXPRESSURE) {
+    int x = map(p.y, TS_MINY, TS_MAXY, 0, LCD_WIDTH);
+    int y = map(p.x, TS_MINX, TS_MAXX, 0, LCD_HEIGHT);
+    handleTouch(x, y);
+    delay(300);
+  }
+}
+
+void drawGrid() {
+  tft.fillScreen(BLACK);
+  tft.setTextSize(3);
+  for (int i = 1; i < gridSize; i++) {
+    tft.drawLine(i * cellWidth, 0, i * cellWidth, LCD_HEIGHT, WHITE);
+    tft.drawLine(0, i * cellHeight, LCD_WIDTH, i * cellHeight, WHITE);
+  }
+}
+
+void handleTouch(int x, int y) {
+  int col = x / cellWidth;
+  int row = y / cellHeight;
+  if (row >= gridSize || col >= gridSize) return;
+  if (board[row][col].occupied) return;
+
+  Particle p = getNextParticle();
+  board[row][col].occupied = true;
+  board[row][col].particle = p;
+  drawSymbol(row, col, p);
+  if (checkWin(p.type)) {
+    showWinner(p.type);
+    delay(2000);
+    resetGame();
+  } else {
+    turnQuark = !turnQuark;
+  }
+}
+
+Particle getNextParticle() {
+  int idx = random(0, 3);
+  return turnQuark ? quarks[idx] : leptons[idx];
+}
+
+void drawSymbol(int row, int col, Particle p) {
+  int x = col * cellWidth;
+  int y = row * cellHeight;
+  tft.setTextColor(p.type == QUARK ? BLUE : GREEN);
+  tft.setCursor(x + 20, y + 20);
+  tft.setTextSize(3);
+  tft.print(p.symbol);
+}
+
+bool checkWin(ParticleType type) {
+  for (int i = 0; i < 3; i++) {
+    if (checkLine(type, board[i][0], board[i][1], board[i][2])) return true;
+    if (checkLine(type, board[0][i], board[1][i], board[2][i])) return true;
+  }
+  if (checkLine(type, board[0][0], board[1][1], board[2][2])) return true;
+  if (checkLine(type, board[0][2], board[1][1], board[2][0])) return true;
+  return false;
+}
+
+bool checkLine(ParticleType type, Cell a, Cell b, Cell c) {
+  return a.occupied && b.occupied && c.occupied &&
+         a.particle.type == type &&
+         b.particle.type == type &&
+         c.particle.type == type;
+}
+
+void showWinner(ParticleType type) {
+  tft.fillScreen(BLACK);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(2);
+  tft.setCursor(20, 100);
+  if (type == QUARK)
+    tft.print("Quark Wins!");
+  else
+    tft.print("Lepton Wins!");
+}
+
+void resetGame() {
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++)
+      board[i][j].occupied = false;
+  turnQuark = true;
+  drawGrid();
+}
