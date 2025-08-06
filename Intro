@@ -1,0 +1,8 @@
+{Motivation}
+Traditional educational tools often fall short when it comes to explaining abstract scientific topics like particle physics. This project aims to bridge that gap by gamifying concepts such as quark-lepton classification, weak interactions, and baryon formation through an interactive touch-based Arduino game.
+
+{Concept Summary}
+    A 3x3 touch interface represents the Tic-Tac-Toe grid.
+    Each player uses particle symbols instead of X or O.
+    Special combinations trigger \textit{interactions} such as decay or annihilation.
+    Educational messages provide real-time feedback.
