@@ -1,0 +1,95 @@
+#include "Arduino_GigaDisplay_GFX.h"
+#include "Arduino_GigaDisplayTouch.h"
+
+GigaDisplay_GFX tft;
+Arduino_GigaDisplayTouch touchDetector;
+
+#define GC9A01A_BLACK   0x0000
+#define GC9A01A_BLUE    0x001F  // Quarks
+#define GC9A01A_GREEN   0x07E0  // Leptons
+#define GC9A01A_WHITE   0xFFFF
+
+const int ROWS = 3;
+const int COLS = 3;
+
+int cellWidth;
+int cellHeight;
+
+int board[ROWS][COLS]; // 0 = empty, 1 = Quark (blue), 2 = Lepton (green)
+bool isQuarkTurn = true;
+
+void drawGrid() {
+  tft.fillScreen(GC9A01A_BLACK);
+  cellWidth = tft.width() / COLS;
+  cellHeight = tft.height() / ROWS;
+
+  // Draw vertical lines
+  for (int i = 1; i < COLS; i++) {
+    tft.drawLine(i * cellWidth, 0, i * cellWidth, tft.height(), GC9A01A_WHITE);
+  }
+  // Draw horizontal lines
+  for (int i = 1; i < ROWS; i++) {
+    tft.drawLine(0, i * cellHeight, tft.width(), i * cellHeight, GC9A01A_WHITE);
+  }
+}
+
+void drawSymbol(int row, int col, int player) {
+  int cx = col * cellWidth + cellWidth / 2;
+  int cy = row * cellHeight + cellHeight / 2;
+  int radius = min(cellWidth, cellHeight) / 4;
+
+  if (player == 1) {
+    // Quark: blue circle
+    tft.fillCircle(cx, cy, radius, GC9A01A_BLUE);
+  } else if (player == 2) {
+    // Lepton: green circle
+    tft.fillCircle(cx, cy, radius, GC9A01A_GREEN);
+  }
+}
+
+void gigaTouchHandler(uint8_t contacts, GDTpoint_t* points) {
+  if (contacts == 0) return;
+
+  int x = points[0].x;
+  int y = points[0].y;
+
+  int col = x / cellWidth;
+  int row = y / cellHeight;
+
+  // Safety check
+  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return;
+
+  if (board[row][col] == 0) {  // Empty cell
+    board[row][col] = isQuarkTurn ? 1 : 2;
+    drawSymbol(row, col, board[row][col]);
+    isQuarkTurn = !isQuarkTurn;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) {}
+
+  tft.begin();
+  drawGrid();
+
+  if (touchDetector.begin()) {
+    Serial.println("Touch controller init - OK");
+  } else {
+    Serial.println("Touch controller init - FAILED");
+    while (1);
+  }
+
+  touchDetector.onDetect(gigaTouchHandler);
+
+  // Initialize board with zeros
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      board[r][c] = 0;
+    }
+  }
+}
+
+void loop() {
+  // Nothing needed here - touch handled by callback
+}
