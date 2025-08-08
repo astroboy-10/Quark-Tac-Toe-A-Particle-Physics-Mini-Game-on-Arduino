@@ -1,0 +1,186 @@
+#include "Arduino_GigaDisplay_GFX.h"
+#include "Arduino_GigaDisplayTouch.h"
+
+GigaDisplay_GFX tft;
+Arduino_GigaDisplayTouch touchDetector;
+
+#define GC9A01A_CYAN    0x07FF
+#define GC9A01A_RED     0xf800
+#define GC9A01A_BLUE    0x001F
+#define GC9A01A_GREEN   0x07E0
+#define GC9A01A_MAGENTA 0xF81F
+#define GC9A01A_WHITE   0xffff
+#define GC9A01A_BLACK   0x0000
+#define GC9A01A_YELLOW  0xFFE0
+
+const int rows = 3;
+const int cols = 3;
+int cellWidth;
+int cellHeight;
+
+int board[rows][cols]; // 0=empty, 1=Quark, 2=Lepton
+int currentPlayer = 1; // 1 = Quark (blue), 2 = Lepton (green)
+bool gameOver = false;
+
+void setup() {
+  Serial.begin(115200);
+  while(!Serial);
+
+  tft.begin();
+  tft.fillScreen(GC9A01A_BLACK);
+  drawGrid();
+
+  cellWidth = tft.width() / cols;
+  cellHeight = tft.height() / rows;
+
+  clearBoard();
+
+  if (!touchDetector.begin()) {
+    Serial.println("Touch init failed!");
+    while (1);
+  }
+  touchDetector.onDetect(touchHandler);
+}
+
+void loop() {
+  // no polling needed
+}
+
+void clearBoard() {
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      board[r][c] = 0;
+    }
+  }
+  currentPlayer = 1;
+  gameOver = false;
+  tft.fillScreen(GC9A01A_BLACK);
+  drawGrid();
+}
+
+void drawGrid() {
+  int w = tft.width();
+  int h = tft.height();
+
+  // Draw vertical lines
+  for (int i = 1; i < cols; i++) {
+    int x = i * w / cols;
+    tft.drawLine(x, 0, x, h, GC9A01A_WHITE);
+  }
+
+  // Draw horizontal lines
+  for (int i = 1; i < rows; i++) {
+    int y = i * h / rows;
+    tft.drawLine(0, y, w, y, GC9A01A_WHITE);
+  }
+}
+
+void touchHandler(uint8_t contacts, GDTpoint_t* points) {
+  if (contacts == 0) return;
+
+  int x = points[0].x;
+  int y = points[0].y;
+
+  if (gameOver) {
+    // Reset the game on any touch after game over
+    clearBoard();
+    return;
+  }
+
+  int col = x / cellWidth;
+  int row = y / cellHeight;
+
+  if (col >= 0 && col < cols && row >= 0 && row < rows) {
+    if (board[row][col] == 0) { // Empty cell
+      board[row][col] = currentPlayer;
+      drawSymbol(row, col, currentPlayer);
+
+      if (checkWin(currentPlayer)) {
+        showWinner(currentPlayer);
+        gameOver = true;
+      } else if (checkDraw()) {
+        showDraw();
+        gameOver = true;
+      } else {
+        currentPlayer = (currentPlayer == 1) ? 2 : 1;
+      }
+    }
+  }
+}
+
+void drawQuarkSymbol(int cx, int cy, int radius) {
+  tft.fillCircle(cx, cy, radius, GC9A01A_BLUE);
+  tft.drawLine(cx + radius / 2, cy + radius / 2, cx + radius, cy + radius, GC9A01A_BLUE);
+}
+
+void drawLeptonSymbol(int cx, int cy, int radius) {
+  tft.drawLine(cx - radius / 2, cy - radius, cx - radius / 2, cy + radius, GC9A01A_GREEN);
+  tft.drawLine(cx - radius / 2, cy + radius, cx + radius, cy + radius, GC9A01A_GREEN);
+}
+
+void drawSymbol(int row, int col, int player) {
+  int cx = col * cellWidth + cellWidth / 2;
+  int cy = row * cellHeight + cellHeight / 2;
+  int radius = min(cellWidth, cellHeight) / 4;
+
+  if (player == 1) {
+    drawQuarkSymbol(cx, cy, radius);
+  } else if (player == 2) {
+    drawLeptonSymbol(cx, cy, radius);
+  }
+}
+
+bool checkWin(int player) {
+  // Check rows
+  for (int r = 0; r < rows; r++) {
+    if (board[r][0] == player && board[r][1] == player && board[r][2] == player)
+      return true;
+  }
+  // Check columns
+  for (int c = 0; c < cols; c++) {
+    if (board[0][c] == player && board[1][c] == player && board[2][c] == player)
+      return true;
+  }
+  // Check diagonals
+  if (board[0][0] == player && board[1][1] == player && board[2][2] == player)
+    return true;
+  if (board[0][2] == player && board[1][1] == player && board[2][0] == player)
+    return true;
+
+  return false;
+}
+
+bool checkDraw() {
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (board[r][c] == 0) return false;
+    }
+  }
+  return true;
+}
+
+void showWinner(int player) {
+  tft.fillRect(0, tft.height() - 40, tft.width(), 40, GC9A01A_BLACK);
+  tft.setCursor(10, tft.height() - 35);
+  tft.setTextSize(3);
+  tft.setTextColor((player == 1) ? GC9A01A_BLUE : GC9A01A_GREEN);
+  if (player == 1) {
+    tft.print("Quark Wins!");
+  } else {
+    tft.print("Lepton Wins!");
+  }
+  tft.setTextSize(1);
+  tft.setTextColor(GC9A01A_WHITE);
+  tft.print("  Touch to restart.");
+}
+
+void showDraw() {
+  tft.fillRect(0, tft.height() - 40, tft.width(), 40, GC9A01A_BLACK);
+  tft.setCursor(10, tft.height() - 35);
+  tft.setTextSize(3);
+  tft.setTextColor(GC9A01A_YELLOW);
+  tft.print("It's a Draw!");
+  tft.setTextSize(1);
+  tft.setTextColor(GC9A01A_WHITE);
+  tft.print("  Touch to restart.");
+}
