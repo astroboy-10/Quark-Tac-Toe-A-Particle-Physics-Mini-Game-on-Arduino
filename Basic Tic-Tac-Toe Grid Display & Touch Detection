@@ -1,0 +1,63 @@
+#include "Arduino_GigaDisplay_GFX.h"
+#include "Arduino_GigaDisplayTouch.h"
+
+GigaDisplay_GFX tft;
+Arduino_GigaDisplayTouch touchDetector;
+
+#define SCREEN_WIDTH  480  // Adjust if needed
+#define SCREEN_HEIGHT 320
+
+// Tic-Tac-Toe grid lines positions
+int cellWidth = SCREEN_WIDTH / 3;
+int cellHeight = SCREEN_HEIGHT / 3;
+
+void gigaTouchHandler(uint8_t contacts, GDTpoint_t* points) {
+  if (contacts > 0) {
+    int x = points[0].x;
+    int y = points[0].y;
+
+    // Calculate row and column from touch position
+    int col = x / cellWidth;
+    int row = y / cellHeight;
+
+    Serial.print("Touched cell: ");
+    Serial.print(row);
+    Serial.print(", ");
+    Serial.println(col);
+
+    // Mark the touched cell with a rectangle
+    tft.drawRect(col * cellWidth, row * cellHeight, cellWidth, cellHeight, 0xF800); // Red rectangle
+  }
+}
+
+void drawGrid() {
+  tft.fillScreen(0x0000); // Black background
+  // Draw vertical lines
+  for (int i = 1; i < 3; i++) {
+    tft.drawFastVLine(i * cellWidth, 0, SCREEN_HEIGHT, 0xFFFF); // White lines
+  }
+  // Draw horizontal lines
+  for (int i = 1; i < 3; i++) {
+    tft.drawFastHLine(0, i * cellHeight, SCREEN_WIDTH, 0xFFFF);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) {}
+
+  Serial.println("Quark-Tac-Toe Init");
+
+tft.begin();  // no return value, so no if-check
+drawGrid();
+
+  if (!touchDetector.begin()) {
+    Serial.println("Touch init failed!");
+    while (1);
+  }
+  touchDetector.onDetect(gigaTouchHandler);
+}
+
+void loop() {
+  // Nothing here, touch event driven
+}
