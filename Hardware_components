@@ -4,6 +4,41 @@ Display: Displaytech INT035TFT-TS}
 8080-style parallel interface via SSD1963 controller.
 4-wire resistive touchscreen via MAX11802 (SPI).
 
+Main:
+Arduino ASX00039 GIGA Display Shield 3.97" Touchscreen 800x480 Mic IMU
+
+Features: 
+Note: The GIGA Display Shield requires a GIGA R1 WiFi board to function. It has no microcontroller and cannot be
+programmed independently.
+
+1. KD040WVFID026-01-C025A 3.97" TFT Display
+480x800 resolution
+16.7 million colors
+0.108 mm pixel size
+Capacitive Touch sensor
+5-point and gesture support
+Edge LED backlight
+
+2. BMI270 6-axis IMU (Accelerometer and Gyroscope)
+16-bit
+3-axis accelerometer with ±2g/±4g/±8g/±16g range
+3-axis gyroscope with ±125dps/±250dps/±500dps/±1000dps/±2000dps range
+
+3. SMLP34RGB2W3 RGB LED
+Common Anode
+IS31FL3197-QFLS2-TR Driver with integrated charge pump
+
+4. MP34DT06JTR Digital Microphone
+AOP = 122.5 dbSPL
+64 dB signal-to-noise ratio
+Omnidirectional sensitivity
+–26 dBFS ± 3 dB sensitivity
+
+5. I/O
+GIGA Connector
+2.54 mm Camera Connecto
+
+
 Microcontroller: Arduino Mega 2560
 16-bit data bus support.
 Flash and SRAM for graphics and game logic.
