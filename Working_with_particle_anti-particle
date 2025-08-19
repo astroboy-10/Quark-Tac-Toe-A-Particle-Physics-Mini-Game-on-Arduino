@@ -1,0 +1,550 @@
+/*
+  Quantum Tic-Tac-Toe (Quarks & Leptons) — Display + Touch (GIGA Display)
+
+  WHAT THIS CODE DOES
+  -------------------
+  • Renders a 3×3 grid on the GIGA Display and handles touch input.
+  • Each turn, Player 1 places Quarks (or AntiQuarks) and Player 2 places Leptons (or AntiLeptons).
+  • A bottom HUD lets you toggle “Particle / Anti” before placing.
+  • Win condition: three identical species (all Quark, all AntiQuark, all Lepton, or all AntiLepton) in a row/column/diagonal.
+  • Special “physics” rules:
+      1) Fermion-like Repulsion
+         If your placement creates an orthogonal pair of identical particles with an empty cell on one side,
+         the pair slides by one cell toward that empty cell (one hop max per turn; deterministic priority).
+      2) Particle–Antiparticle Annihilation
+         If a particle is orthogonally adjacent to its matching antiparticle, both vanish and become a γ “photon”
+         marker that blocks those squares for the opponent’s next turn (temporary occupancy ban).
+
+  PARTICLE PHYSICS ANALOGY
+  ------------------------
+  • Species: Quark (P1), Lepton (P2), and their antiparticles.
+    - Antiparticles are selectable via the HUD toggle.  
+  • Repulsion ≈ Pauli pressure / like-charge repulsion:
+    Identical fermions resist crowding; here that aversion is modeled as a short, discrete “slide” to reduce overlap.
+  • Annihilation: particle + antiparticle → γγ
+    When matter meets antimatter, they annihilate into photons. We represent the photons as temporary blockers
+    (they “carry energy away” and briefly prevent new occupancy in those squares).
+  • Photons do not count toward wins; they only enforce a cooldown that shapes the next move’s options.
+  • Determinism:
+    Sliding uses a fixed direction priority (→, ←, ↓, ↑) and is limited to one hop per placement to avoid chaos
+    and keep outcomes reproducible.
+
+  WHAT YOU CAN LEARN / EXPLORE
+  ----------------------------
+  • Exclusion/repulsion effects: how small local rules (no “piling” of identical tokens) reshape global strategy.
+  • Matter–antimatter dynamics: using annihilation tactically to erase threats and create temporary “forbidden” regions.
+  • Constraint-driven play: photons as short-lived boundary conditions that guide subsequent evolution of the board.
+  • Symmetries and scoring: whether you allow wins by antiparticles changes the symmetry of victory conditions
+    (you can tweak the check to require “matter-only” or “antimatter-only” lines, or even mixed constraints).
+
+  UI / CONTROLS
+  -------------
+  • Tap inside the grid to place your current selection (particle or antiparticle).
+  • Tap the HUD button (“Particle” / “Anti”) to toggle your next placement type.
+  • Any tap after game over resets the board.
+
+  EXTENSIONS (PHYSICS-INSPIRED, OPTIONAL)
+  ---------------------------------------
+  • Color confinement (QCD): add RGB quarks that “bind” into a locked baryon when all three colors connect.
+  • Tunneling: rare diagonal hops when straight slides are blocked.
+  • Pauli in 2×2: eject a token if a 2×2 region overpopulates with identical fermions.
+
+  Notes: This is a pedagogical toy; rules are stylized, not a numerical simulation of QFT/QED/QCD.
+*/
+
+
+#include "Arduino_GigaDisplay_GFX.h"
+#include "Arduino_GigaDisplayTouch.h"
+
+GigaDisplay_GFX tft;
+Arduino_GigaDisplayTouch touchDetector;
+
+// ---- Colors ----
+#define GC9A01A_CYAN    0x07FF
+#define GC9A01A_RED     0xF800
+#define GC9A01A_BLUE    0x001F
+#define GC9A01A_GREEN   0x07E0
+#define GC9A01A_MAGENTA 0xF81F
+#define GC9A01A_WHITE   0xFFFF
+#define GC9A01A_BLACK   0x0000
+#define GC9A01A_YELLOW  0xFFE0
+
+// ---- Board / HUD ----
+const int rows = 3;
+const int cols = 3;
+const int HUD_HEIGHT = 48;         // Bottom bar for toggle & messages
+
+int boardTop = 0;                  // y-offset of the board (0)
+int boardHeight;                   // tft.height() - HUD_HEIGHT
+int boardWidth;                    // full width
+int cellWidth;
+int cellHeight;
+
+// ---- Particles ----
+// 0 = empty
+// 1 = Quark
+// 2 = Lepton
+// 3 = AntiQuark
+// 4 = AntiLepton
+// 5 = Photon blocker (temporary)
+enum Part { EMPTY=0, QUARK=1, LEPTON=2, AQUARK=3, ALEPTON=4, PHOTON=5 };
+
+int board[rows][cols];
+uint8_t photon_life[rows][cols];   // lifetime in turns (0 = none)
+
+// Player state
+int currentPlayer = 1;             // 1 or 2
+bool placeAntiparticle = false;    // toggle per turn
+bool gameOver = false;
+
+// --- Utils ---
+bool inBounds(int r, int c) { return r >= 0 && r < rows && c >= 0 && c < cols; }
+
+// Forward decls
+void drawHUD();
+void drawGrid();
+void redrawBoard();
+void clearBoard();
+void drawCell(int r, int c);
+void drawSymbol(int row, int col, int particle);
+void drawQuarkSymbol(int cx, int cy, int radius);
+void drawLeptonSymbol(int cx, int cy, int radius);
+void drawAntiQuarkSymbol(int cx, int cy, int radius);
+void drawAntiLeptonSymbol(int cx, int cy, int radius);
+void drawPhoton(int cx, int cy, int radius);
+void applyRepulsion(int r, int c);
+bool trySlidePair(int r, int c, int dr, int dc);
+bool checkWinOfThreeIdentical();
+bool checkDraw();
+void showWinner(int particle);
+void showDraw();
+void handleAnnihilationAround(int r, int c);
+void decayPhotonsOnTurnAdvance();
+bool isPlayersPiece(int particle, int player);
+bool isMatchingAntiPair(int a, int b);
+void touchHandler(uint8_t contacts, GDTpoint_t* points);
+
+void setup() {
+  Serial.begin(115200);
+  unsigned long t0 = millis();
+  while (!Serial && millis() - t0 < 800) {} // don't block forever
+
+  tft.begin();
+  // tft.setRotation(1); // uncomment if you need to rotate
+  tft.fillScreen(GC9A01A_BLACK);
+
+  boardWidth  = tft.width();
+  boardHeight = tft.height() - HUD_HEIGHT;
+
+  cellWidth  = boardWidth / cols;
+  cellHeight = boardHeight / rows;
+
+  clearBoard();
+  drawGrid();
+  drawHUD();
+
+  if (!touchDetector.begin()) {
+    Serial.println("Touch init failed!");
+  } else {
+    touchDetector.onDetect(touchHandler);
+  }
+}
+
+void loop() {
+  // no polling needed; touch interrupt-driven
+}
+
+// -------- Game core --------
+
+void clearBoard() {
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      board[r][c] = EMPTY;
+      photon_life[r][c] = 0;
+    }
+  }
+  currentPlayer = 1;
+  placeAntiparticle = false;
+  gameOver = false;
+
+  tft.fillScreen(GC9A01A_BLACK);
+  drawGrid();
+  drawHUD();
+}
+
+void redrawBoard() {
+  // Redraw grid area
+  tft.fillRect(0, boardTop, boardWidth, boardHeight, GC9A01A_BLACK);
+  drawGrid();
+  // Redraw all cells
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      drawCell(r, c);
+    }
+  }
+  drawHUD();
+}
+
+void drawGrid() {
+  // Vertical lines
+  for (int i = 1; i < cols; i++) {
+    int x = i * boardWidth / cols;
+    tft.drawLine(x, boardTop, x, boardTop + boardHeight, GC9A01A_WHITE);
+  }
+  // Horizontal lines
+  for (int i = 1; i < rows; i++) {
+    int y = boardTop + i * boardHeight / rows;
+    tft.drawLine(0, y, boardWidth, y, GC9A01A_WHITE);
+  }
+}
+
+void drawHUD() {
+  // HUD background
+  tft.fillRect(0, boardTop + boardHeight, boardWidth, HUD_HEIGHT, 0x18E3 /* dark grayish */);
+
+  // Toggle button (left)
+  int btnW = 120;
+  int btnH = HUD_HEIGHT - 12;
+  int btnX = 6;
+  int btnY = boardTop + boardHeight + 6;
+
+  uint16_t btnColor = placeAntiparticle ? GC9A01A_MAGENTA : GC9A01A_CYAN;
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 8, btnColor);
+  tft.drawRoundRect(btnX, btnY, btnW, btnH, 8, GC9A01A_WHITE);
+  tft.setCursor(btnX + 10, btnY + 12);
+  tft.setTextColor(GC9A01A_BLACK);
+  tft.setTextSize(2);
+  tft.print(placeAntiparticle ? "Anti" : "Particle");
+
+  // Player + species text
+  tft.setTextColor(GC9A01A_WHITE);
+  tft.setTextSize(2);
+  int textX = btnX + btnW + 12;
+  int textY = btnY + 12;
+  tft.setCursor(textX, textY);
+  tft.print("P");
+  tft.print(currentPlayer);
+  tft.print(": ");
+  if (currentPlayer == 1) {
+    tft.print(placeAntiparticle ? "AntiQuark" : "Quark");
+  } else {
+    tft.print(placeAntiparticle ? "AntiLepton" : "Lepton");
+  }
+
+  // Help text (right)
+  tft.setTextSize(1);
+  tft.setCursor(boardWidth - 160, textY + 2);
+  tft.print("Tap here to toggle");
+  tft.setCursor(boardWidth - 160, textY + 16);
+  tft.print("Anti / Particle");
+}
+
+// Draw whichever is in board[r][c]
+void drawCell(int r, int c) {
+  int x0 = c * cellWidth;
+  int y0 = boardTop + r * cellHeight;
+  int cx = x0 + cellWidth / 2;
+  int cy = y0 + cellHeight / 2;
+  int radius = (cellWidth < cellHeight ? cellWidth : cellHeight) / 4;
+
+  // Clear cell area
+  tft.fillRect(x0 + 1, y0 + 1, cellWidth - 2, cellHeight - 2, GC9A01A_BLACK);
+
+  int p = board[r][c];
+  if (p == EMPTY) return;
+  if (p == PHOTON) { drawPhoton(cx, cy, radius); return; }
+
+  drawSymbol(r, c, p);
+}
+
+void drawSymbol(int row, int col, int particle) {
+  int x0 = col * cellWidth;
+  int y0 = boardTop + row * cellHeight;
+  int cx = x0 + cellWidth / 2;
+  int cy = y0 + cellHeight / 2;
+  int radius = (cellWidth < cellHeight ? cellWidth : cellHeight) / 4;
+
+  switch (particle) {
+    case QUARK:   drawQuarkSymbol(cx, cy, radius); break;
+    case LEPTON:  drawLeptonSymbol(cx, cy, radius); break;
+    case AQUARK:  drawAntiQuarkSymbol(cx, cy, radius); break;
+    case ALEPTON: drawAntiLeptonSymbol(cx, cy, radius); break;
+    default: break;
+  }
+}
+
+// --- Particle drawings (stylized, quick) ---
+void drawQuarkSymbol(int cx, int cy, int radius) {
+  tft.fillCircle(cx, cy, radius, GC9A01A_BLUE);
+  tft.drawLine(cx + radius/2, cy + radius/2, cx + radius, cy + radius, GC9A01A_BLUE);
+}
+
+void drawLeptonSymbol(int cx, int cy, int radius) {
+  tft.drawLine(cx - radius/2, cy - radius, cx - radius/2, cy + radius, GC9A01A_GREEN);
+  tft.drawLine(cx - radius/2, cy + radius, cx + radius, cy + radius, GC9A01A_GREEN);
+}
+
+void drawAntiQuarkSymbol(int cx, int cy, int radius) {
+  // outline circle with a slash
+  tft.drawCircle(cx, cy, radius, GC9A01A_MAGENTA);
+  tft.drawCircle(cx, cy, radius-2, GC9A01A_MAGENTA);
+  tft.drawLine(cx - radius, cy - radius, cx + radius, cy + radius, GC9A01A_MAGENTA);
+}
+
+void drawAntiLeptonSymbol(int cx, int cy, int radius) {
+  // "∧" shape plus a small dot
+  tft.drawLine(cx - radius, cy + radius, cx, cy - radius, GC9A01A_YELLOW);
+  tft.drawLine(cx + radius, cy + radius, cx, cy - radius, GC9A01A_YELLOW);
+  tft.fillCircle(cx, cy + radius/2, 2, GC9A01A_YELLOW);
+}
+
+void drawPhoton(int cx, int cy, int radius) {
+  // simple starburst
+  for (int i = -radius; i <= radius; i += radius/2) {
+    tft.drawLine(cx - radius, cy + i, cx + radius, cy + i, GC9A01A_WHITE);
+    tft.drawLine(cx + i, cy - radius, cx + i, cy + radius, GC9A01A_WHITE);
+  }
+  tft.setTextColor(GC9A01A_WHITE);
+  tft.setTextSize(1);
+  tft.setCursor(cx - 3, cy - 3);
+  tft.print("g"); // gamma
+}
+
+// -------- Physics rules --------
+
+// When a token is placed at (r,c), try to slide any identical adjacent pair by one cell toward/away from empty
+void applyRepulsion(int r, int c) {
+  // directions: right, left, down, up (deterministic order)
+  const int dirs[4][2] = { {0,1}, {0,-1}, {1,0}, {-1,0} };
+
+  // One hop max per move for determinism
+  for (int i = 0; i < 4; i++) {
+    if (trySlidePair(r, c, dirs[i][0], dirs[i][1])) return;
+  }
+  // also try when (r,c) is second in the pair
+  for (int i = 0; i < 4; i++) {
+    int rn = r + dirs[i][0], cn = c + dirs[i][1];
+    if (inBounds(rn, cn) && board[rn][cn] == board[r][c] && board[r][c] != EMPTY) {
+      if (trySlidePair(rn, cn, dirs[i][0], dirs[i][1])) return;
+    }
+  }
+}
+
+bool trySlidePair(int r, int c, int dr, int dc) {
+  int p = board[r][c];
+  if (p == EMPTY || p == PHOTON) return false;
+
+  int r2 = r + dr, c2 = c + dc;        // neighbor
+  int r3 = r + 2*dr, c3 = c + 2*dc;    // next along
+
+  // Pattern A: [P][P][_]
+  if (inBounds(r2,c2) && inBounds(r3,c3) &&
+      board[r2][c2] == p && board[r3][c3] == EMPTY) {
+    // slide forward: empty moves to (r,c)
+    board[r3][c3] = p;
+    // board[r2][c2] remains p
+    board[r][c]   = EMPTY;
+    redrawBoard();
+    return true;
+  }
+
+  // Pattern B: [_][P][P]
+  int rb = r - dr, cb = c - dc;
+  if (inBounds(rb,cb) && inBounds(r2,c2) &&
+      board[r2][c2] == p && board[rb][cb] == EMPTY) {
+    // slide backward: empty moves to (r2,c2)
+    board[rb][cb] = p;
+    // board[r][c] remains p
+    board[r2][c2] = EMPTY;
+    redrawBoard();
+    return true;
+  }
+
+  return false;
+}
+
+// Annihilation: if a particle is orthogonally adjacent to its matching antiparticle, both vanish -> photons
+void handleAnnihilationAround(int r, int c) {
+  const int dirs[4][2] = { {0,1}, {0,-1}, {1,0}, {-1,0} };
+  int p0 = board[r][c];
+  if (p0 == EMPTY || p0 == PHOTON) return;
+
+  for (int i = 0; i < 4; i++) {
+    int rn = r + dirs[i][0], cn = c + dirs[i][1];
+    if (!inBounds(rn, cn)) continue;
+    int p1 = board[rn][cn];
+    if (isMatchingAntiPair(p0, p1)) {
+      // both become photons with lifetime 1 (blocks for opponent's next turn)
+      board[r][c] = PHOTON;
+      board[rn][cn] = PHOTON;
+      photon_life[r][c] = 1;
+      photon_life[rn][cn] = 1;
+      drawCell(r, c);
+      drawCell(rn, cn);
+      // Note: only process one neighbor per call; if you want chain annihilations, remove 'break'
+      // but that can get wild on a 3x3!
+      break;
+    }
+  }
+}
+
+// decay all photon blockers by 1 at the start of *your* next turn
+void decayPhotonsOnTurnAdvance() {
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (board[r][c] == PHOTON && photon_life[r][c] > 0) {
+        photon_life[r][c]--;
+        if (photon_life[r][c] == 0) {
+          board[r][c] = EMPTY;
+          drawCell(r, c);
+        }
+      }
+    }
+  }
+}
+
+// -------- Win / Draw --------
+
+// Keep it simple: win = 3 identical (particle OR antiparticle). Photons never count.
+bool checkWinOfThreeIdentical() {
+  // rows
+  for (int r = 0; r < rows; r++) {
+    int a = board[r][0], b = board[r][1], c = board[r][2];
+    if (a != EMPTY && a != PHOTON && a == b && b == c) return true;
+  }
+  // cols
+  for (int c = 0; c < cols; c++) {
+    int a = board[0][c], b = board[1][c], d = board[2][c];
+    if (a != EMPTY && a != PHOTON && a == b && b == d) return true;
+  }
+  // diags
+  {
+    int a = board[0][0], b = board[1][1], c2 = board[2][2];
+    if (a != EMPTY && a != PHOTON && a == b && b == c2) return true;
+  }
+  {
+    int a = board[0][2], b = board[1][1], c2 = board[2][0];
+    if (a != EMPTY && a != PHOTON && a == b && b == c2) return true;
+  }
+  return false;
+}
+
+bool checkDraw() {
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (board[r][c] == EMPTY) return false;
+    }
+  }
+  return true;
+}
+
+void showWinner(int particle) {
+  // HUD line
+  tft.fillRect(0, boardTop + boardHeight, boardWidth, HUD_HEIGHT, 0x18E3);
+  tft.setTextSize(2);
+  tft.setTextColor(GC9A01A_WHITE);
+  tft.setCursor(8, boardTop + boardHeight + 12);
+  tft.print("Win: ");
+  switch (particle) {
+    case QUARK:   tft.print("Quark"); break;
+    case LEPTON:  tft.print("Lepton"); break;
+    case AQUARK:  tft.print("AntiQuark"); break;
+    case ALEPTON: tft.print("AntiLepton"); break;
+    default:      tft.print("Three in a row"); break;
+  }
+  tft.setTextSize(1);
+  tft.setCursor(8, boardTop + boardHeight + 32);
+  tft.print("Touch anywhere to restart");
+}
+
+void showDraw() {
+  tft.fillRect(0, boardTop + boardHeight, boardWidth, HUD_HEIGHT, 0x18E3);
+  tft.setTextSize(2);
+  tft.setTextColor(GC9A01A_WHITE);
+  tft.setCursor(8, boardTop + boardHeight + 12);
+  tft.print("It's a Draw!");
+  tft.setTextSize(1);
+  tft.setCursor(8, boardTop + boardHeight + 32);
+  tft.print("Touch anywhere to restart");
+}
+
+// -------- Helpers --------
+bool isPlayersPiece(int particle, int player) {
+  if (player == 1) return (particle == QUARK || particle == AQUARK);
+  else             return (particle == LEPTON || particle == ALEPTON);
+}
+
+bool isMatchingAntiPair(int a, int b) {
+  return ( (a == QUARK  && b == AQUARK)  || (a == AQUARK  && b == QUARK) ||
+           (a == LEPTON && b == ALEPTON) || (a == ALEPTON && b == LEPTON) );
+}
+
+// -------- Touch --------
+void touchHandler(uint8_t contacts, GDTpoint_t* points) {
+  if (contacts == 0) return;
+
+  int x = points[0].x;
+  int y = points[0].y;
+
+  // If game over, any touch restarts
+  if (gameOver) {
+    clearBoard();
+    return;
+  }
+
+  // HUD toggle button hit test
+  int btnW = 120;
+  int btnH = HUD_HEIGHT - 12;
+  int btnX = 6;
+  int btnY = boardTop + boardHeight + 6;
+  bool inHUD = (y >= boardTop + boardHeight);
+
+  if (inHUD) {
+    // If user tapped the toggle button, flip anti/particle
+    if (x >= btnX && x < btnX + btnW && y >= btnY && y < btnY + btnH) {
+      placeAntiparticle = !placeAntiparticle;
+      drawHUD();
+    }
+    return;
+  }
+
+  // Board touch -> place
+  int col = x / cellWidth;
+  int row = (y - boardTop) / cellHeight;
+
+  if (!inBounds(row, col)) return;
+
+  // Blockers: can't place on PHOTON or occupied
+  if (board[row][col] != EMPTY) return;
+
+  // Decide what to place based on player & toggle
+  int p = EMPTY;
+  if (currentPlayer == 1) p = placeAntiparticle ? AQUARK : QUARK;
+  else                    p = placeAntiparticle ? ALEPTON : LEPTON;
+
+  board[row][col] = p;
+  drawCell(row, col);
+
+  // Repulsion: identical adjacent pair slides one cell if possible
+  applyRepulsion(row, col);
+
+  // Annihilation: if matched with antiparticle neighbor, convert both to photons
+  handleAnnihilationAround(row, col);
+
+  // Win/Draw checks
+  if (checkWinOfThreeIdentical()) {
+    showWinner(p);
+    gameOver = true;
+    return;
+  } else if (checkDraw()) {
+    showDraw();
+    gameOver = true;
+    return;
+  }
+
+  // Advance turn
+  currentPlayer = (currentPlayer == 1) ? 2 : 1;
+  placeAntiparticle = false; // reset toggle each turn for clarity
+  decayPhotonsOnTurnAdvance();
+  drawHUD();
+}
